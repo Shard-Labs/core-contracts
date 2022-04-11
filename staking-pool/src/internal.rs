@@ -216,7 +216,29 @@ impl StakingContract {
 
             // Distributing the remaining reward to the delegators first.
             let remaining_reward = total_reward - owners_fee;
-            self.total_staked_balance += remaining_reward;
+            
+            let mut total_reward_for_different_delegators_address:Balance = 0;
+            // TODO Send part of the reward to those accounts that gave alternative addresses
+            // Iterate through all accounts that have given alternative addresses
+            for mut reward_account in self.reward_accounts.to_vec(){
+                // Get for every account, data that shows how much stake shares this account has
+                let account = self.internal_get_account(&reward_account.0);
+                // Calculate reward based on stake shares
+                let reward_for_account = self.get_amount_based_on_staked_shares(account.stake_shares, remaining_reward);
+                reward_account.1.rewards += reward_for_account;
+                // Save updated data for reward accounts, which should be used later when withdrawing
+                self.internal_save_reward_account(
+                    &reward_account.0, 
+                    &reward_account.1.account_id, 
+                    Some(reward_account.1.rewards)
+                );
+                // Calculate all the rewards that will be send to alternative delegator's addresses
+                // This amount wont be included in the staked amount
+                total_reward_for_different_delegators_address += reward_for_account;
+            }
+
+
+            self.total_staked_balance += remaining_reward - total_reward_for_different_delegators_address;
 
             // Now buying "stake" shares for the contract owner at the new share price.
             let num_shares = self.num_shares_from_staked_amount_rounded_down(owners_fee);
@@ -269,6 +291,22 @@ impl StakingContract {
         (U256::from(self.total_stake_shares) * U256::from(amount)
             / U256::from(self.total_staked_balance))
         .as_u128()
+    }
+
+    /// Get part of the passed amount, based on the relation num_shares/total_stake_shares
+    pub (crate) fn get_amount_based_on_staked_shares(
+        &self,
+        num_shares: NumStakeShares,
+        whole_amount: Balance
+    ) -> Balance{
+        assert!(
+            self.total_stake_shares > 0,
+            "The total number of stake shares can't be 0"
+        );
+
+        return (U256::from(whole_amount) * U256::from(num_shares)
+            / U256::from(self.total_stake_shares))
+            .as_u128();
     }
 
     /// Returns the number of "stake" shares rounded up corresponding to the given staked balance
@@ -333,5 +371,11 @@ impl StakingContract {
         } else {
             self.accounts.remove(account_id);
         }
+    }
+
+    /// Inner method to save or update reward account 
+    pub(crate) fn internal_save_reward_account(&mut self, account_id: &AccountId, reward_account_id: &AccountId, rewards: Option<Balance>){
+        let delegator_reward_account = DelegatorRewardAccount{account_id: reward_account_id.clone(), rewards: rewards.unwrap_or_default()};
+        self.reward_accounts.insert(&account_id, &delegator_reward_account);
     }
 }
