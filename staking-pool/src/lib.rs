@@ -68,6 +68,12 @@ pub struct HumanReadableAccount {
     pub can_withdraw: bool,
 }
 
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct DelegatorRewardAccount{
+    pub account_id: AccountId,
+    pub rewards: Balance
+}
+
 impl Default for Account {
     fn default() -> Self {
         Self {
@@ -114,6 +120,11 @@ pub struct StakingContract {
     /// Pausing is useful for node maintenance. Only the owner can pause and resume staking.
     /// The contract is not paused by default.
     pub paused: bool,
+
+    /// Map of delegator account ID to the account ID that he wants its rewards to be sent.
+    /// If there is an entry in this collection, then the reward is not going to be staked
+    /// in the pool and will be transfered to the account
+    pub reward_accounts: UnorderedMap<AccountId, DelegatorRewardAccount>,
 }
 
 impl Default for StakingContract {
@@ -199,6 +210,7 @@ impl StakingContract {
             reward_fee_fraction,
             accounts: UnorderedMap::new(b"u".to_vec()),
             paused: false,
+            reward_accounts: UnorderedMap::new(b"u".to_vec()),
         };
         // Staking with the current pool to make sure the staking key is valid.
         this.internal_restake();
@@ -233,6 +245,20 @@ impl StakingContract {
         self.internal_stake(amount);
 
         self.internal_restake();
+    }
+
+    /// Deposits and stakes and also gives alternative address
+    /// where rewards will be paid to
+    #[payable]
+    pub fn deposit_and_stake_with_rewards_to_different_account(&mut self, reward_account_id: AccountId){
+        assert!(
+            env::is_valid_account_id(reward_account_id.clone().as_bytes()),
+            "Invalid reward account ID"
+        );
+        let caller_account_id = env::predecessor_account_id();
+        self.internal_save_reward_account(&caller_account_id,&reward_account_id, None::<Balance>);
+
+        self.deposit_and_stake(); 
     }
 
     /// Withdraws the entire unstaked balance from the predecessor account.
@@ -514,10 +540,16 @@ mod tests {
             owner: String,
             stake_public_key: String,
             reward_fee_fraction: RewardFeeFraction,
+            balance: Option<Balance>,
         ) -> Self {
+            let acc_balance = if balance.is_none(){
+                ntoy(30)
+            }else{
+                balance.unwrap()
+            };
             let context = VMContextBuilder::new()
                 .current_account_id(owner.clone())
-                .account_balance(ntoy(30))
+                .account_balance(acc_balance)
                 .finish();
             testing_env!(context.clone());
             let contract = StakingContract::new(
@@ -530,7 +562,7 @@ mod tests {
             Emulator {
                 contract,
                 epoch_height: 0,
-                amount: ntoy(30),
+                amount: acc_balance,
                 locked_amount: 0,
                 last_total_staked_balance,
                 last_total_stake_shares,
@@ -589,6 +621,7 @@ mod tests {
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         emulator.update_context(bob(), 0);
         emulator.contract.internal_restake();
@@ -619,6 +652,7 @@ mod tests {
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         let deposit_amount = ntoy(1_000_000);
         emulator.update_context(bob(), deposit_amount);
@@ -645,6 +679,7 @@ mod tests {
                 numerator: 10,
                 denominator: 100,
             },
+            None::<Balance>,
         );
         let deposit_amount = ntoy(1_000_000);
         emulator.update_context(bob(), deposit_amount);
@@ -708,6 +743,7 @@ mod tests {
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         let deposit_amount = ntoy(1_000_000);
         emulator.update_context(bob(), deposit_amount);
@@ -763,6 +799,7 @@ mod tests {
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         let deposit_amount = ntoy(1_000_000);
         emulator.update_context(bob(), deposit_amount);
@@ -802,6 +839,7 @@ mod tests {
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         emulator.update_context(alice(), ntoy(1_000_000));
         emulator.contract.deposit();
@@ -859,6 +897,7 @@ mod tests {
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         let initial_balance = 100;
         emulator.update_context(alice(), initial_balance);
@@ -876,11 +915,56 @@ mod tests {
     }
 
     #[test]
+    fn test_shares(){
+        let mut emulator = Emulator::new(
+            owner(),
+            "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
+            zero_fee(),
+            Some(100)
+        );
+
+        log_contract(&emulator.contract);
+
+        println!("Alice deposits 10");
+        emulator.update_context(alice(), 10);
+        emulator.contract.deposit();
+        emulator.amount+=10;
+        log_contract(&emulator.contract);
+
+        println!("Alice stakes 5");
+        emulator.contract.stake(5.into());
+        emulator.simulate_stake_call();
+        log_contract(&emulator.contract);
+
+        log_delegator(alice(), &emulator.contract);
+        println!("Bob deposits 50");
+        emulator.update_context(bob(), 50);
+        emulator.contract.deposit();
+        emulator.amount+=50;
+        log_contract(&emulator.contract);
+        println!("Bob stakes 20");
+        emulator.contract.stake(20.into());
+        log_delegator(bob(), &emulator.contract);
+        log_contract(&emulator.contract);
+        emulator.simulate_stake_call();
+        println!("Change epoch");
+        emulator.skip_epochs(10);
+        emulator.update_context(alice(), 0);
+        log_contract(&emulator.contract);
+        emulator.contract.ping();
+        emulator.update_context(alice(), 0);
+
+        log_contract(&emulator.contract);
+        log_delegator(alice(), &emulator.contract);
+    }
+
+    #[test]
     fn test_rewards() {
         let mut emulator = Emulator::new(
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
+            None::<Balance>,
         );
         let initial_balance = ntoy(100);
         emulator.update_context(alice(), initial_balance);
