@@ -67,6 +67,23 @@ impl StakingContract {
         self.last_total_balance -= amount;
     }
 
+    pub(crate) fn internal_withdraw_rewards(&mut self){
+        let account_id = env::predecessor_account_id();
+
+        let reward_account_option = self.reward_accounts.get(&account_id);
+        if reward_account_option.is_none() {
+            return;
+        }
+        
+        let reward_account = reward_account_option.unwrap();
+        if reward_account.rewards <= 0 {
+            return;
+        }
+
+        self.reward_accounts.remove(&account_id);
+        Promise::new(reward_account.account_id).transfer(reward_account.rewards);
+    }
+
     pub(crate) fn internal_stake(&mut self, amount: Balance) {
         assert!(amount > 0, "Staking amount should be positive");
 
