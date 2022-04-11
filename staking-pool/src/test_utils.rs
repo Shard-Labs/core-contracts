@@ -1,6 +1,8 @@
 use near_sdk::{AccountId, MockedBlockchain, PromiseResult, VMContext};
 use near_sdk::{Balance, BlockHeight, EpochHeight};
 
+use crate::StakingContract;
+
 pub fn staking() -> AccountId {
     "staking".to_string()
 }
@@ -13,6 +15,21 @@ pub fn bob() -> AccountId {
 }
 pub fn owner() -> AccountId {
     "owner".to_string()
+}
+
+pub fn log_contract(contract: &StakingContract){
+    println!(
+        "Contract - Shares: {}, Staked Balance: {}, Total Balance: {}",
+        contract.total_stake_shares, contract.total_staked_balance, contract.last_total_balance
+    );
+}
+
+pub fn log_delegator(account_id:AccountId, contract: &StakingContract){
+    let account = contract.internal_get_account(&account_id);
+    println!(
+        "{} Shares: {}, UnStaked Balance: {}",
+        account_id, account.stake_shares, account.unstaked
+    );
 }
 
 pub fn ntoy(near_amount: Balance) -> Balance {
