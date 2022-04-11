@@ -959,6 +959,11 @@ mod tests {
 
         log_contract(&emulator.contract);
         log_delegator(alice(), &emulator.contract);
+
+        println!("Deposit and stake 50, but give alternative address");
+        emulator.update_context("mario".to_string(), 50);
+        emulator.amount += 50;
+        emulator.contract.deposit_and_stake_with_rewards_to_different_account("mario2".to_string());
     }
 
     #[test]
