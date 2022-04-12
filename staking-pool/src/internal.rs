@@ -67,6 +67,7 @@ impl StakingContract {
         self.last_total_balance -= amount;
     }
 
+    /// Withdraws all rewards for this account
     pub(crate) fn internal_withdraw_rewards(&mut self){
         let account_id = env::predecessor_account_id();
 
@@ -80,7 +81,7 @@ impl StakingContract {
             return;
         }
 
-        self.reward_accounts.remove(&account_id);
+        self.internal_remove_reward_account(&account_id);
         Promise::new(reward_account.account_id).transfer(reward_account.rewards);
     }
 
@@ -394,5 +395,10 @@ impl StakingContract {
     pub(crate) fn internal_save_reward_account(&mut self, account_id: &AccountId, reward_account_id: &AccountId, rewards: Option<Balance>){
         let delegator_reward_account = DelegatorRewardAccount{account_id: reward_account_id.clone(), rewards: rewards.unwrap_or_default()};
         self.reward_accounts.insert(&account_id, &delegator_reward_account);
+    }
+
+    /// Inner method to remove reward account
+    pub(crate) fn internal_remove_reward_account(&mut self, account_id: &AccountId){
+        self.reward_accounts.remove(account_id);
     }
 }

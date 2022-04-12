@@ -187,6 +187,7 @@ impl StakingContract {
         owner_id: AccountId,
         stake_public_key: Base58PublicKey,
         reward_fee_fraction: RewardFeeFraction,
+        maximum_allowed_reward_accounts: u16
     ) -> Self {
         assert!(!env::state_exists(), "Already initialized");
         reward_fee_fraction.assert_valid();
@@ -212,6 +213,7 @@ impl StakingContract {
             accounts: UnorderedMap::new(b"u".to_vec()),
             paused: false,
             reward_accounts: UnorderedMap::new(b"r".to_vec()),
+            reward_accounts_limit: maximum_allowed_reward_accounts,
         };
         // Staking with the current pool to make sure the staking key is valid.
         this.internal_restake();
@@ -343,6 +345,14 @@ impl StakingContract {
         self.internal_restake();
     }
 
+    /// Withdraws rewards for caller account id
+    /// If has any rewards to be withdrawn
+    pub fn withdraw_rewards(&mut self){
+        self.internal_ping();
+
+        self.internal_withdraw_rewards();
+    }
+
     /****************/
     /* View methods */
     /****************/
@@ -420,6 +430,16 @@ impl StakingContract {
         (from_index..std::cmp::min(from_index + limit, keys.len()))
             .map(|index| self.get_account(keys.get(index).unwrap()))
             .collect()
+    }
+
+    /// Returns reward_accounts limit
+    pub fn get_reward_accounts_limit(&self) -> u16{
+        return self.reward_accounts_limit;
+    }
+
+    /// Returns reward_accounts count
+    pub fn get_reward_accounts_count(&self) -> u64{
+        return self.reward_accounts.len();
     }
 
     /*************/
@@ -510,6 +530,13 @@ impl StakingContract {
         self.paused = false;
         self.internal_restake();
     }
+
+    pub fn update_reward_accounts_limit(&mut self, reward_accounts_limit: u16){
+        self.assert_owner();
+        assert!((reward_accounts_limit as u64) >= self.reward_accounts.len());
+
+        self.reward_accounts_limit = reward_accounts_limit;
+    }
 }
 
 #[cfg(test)]
@@ -560,6 +587,7 @@ mod tests {
                 owner,
                 Base58PublicKey::try_from(stake_public_key).unwrap(),
                 reward_fee_fraction,
+                1000
             );
             let last_total_staked_balance = contract.total_staked_balance;
             let last_total_stake_shares = contract.total_stake_shares;
