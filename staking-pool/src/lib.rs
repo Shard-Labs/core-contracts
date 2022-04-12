@@ -120,11 +120,12 @@ pub struct StakingContract {
     /// Pausing is useful for node maintenance. Only the owner can pause and resume staking.
     /// The contract is not paused by default.
     pub paused: bool,
-
     /// Map of delegator account ID to the account ID that he wants its rewards to be sent.
     /// If there is an entry in this collection, then the reward is not going to be staked
     /// in the pool and will be transfered to the account
     pub reward_accounts: UnorderedMap<AccountId, DelegatorRewardAccount>,
+    /// Contract maximum available accounts that can give alternative address for staking rewards
+    pub reward_accounts_limit: u16,
 }
 
 impl Default for StakingContract {
@@ -210,7 +211,7 @@ impl StakingContract {
             reward_fee_fraction,
             accounts: UnorderedMap::new(b"u".to_vec()),
             paused: false,
-            reward_accounts: UnorderedMap::new(b"u".to_vec()),
+            reward_accounts: UnorderedMap::new(b"r".to_vec()),
         };
         // Staking with the current pool to make sure the staking key is valid.
         this.internal_restake();
@@ -964,6 +965,14 @@ mod tests {
         emulator.update_context("mario".to_string(), 50);
         emulator.amount += 50;
         emulator.contract.deposit_and_stake_with_rewards_to_different_account("mario2".to_string());
+        log_contract(&emulator.contract);
+        emulator.skip_epochs(20);
+        emulator.simulate_stake_call();
+        emulator.contract.ping();
+        emulator.update_context(alice(), 0);
+
+        log_contract(&emulator.contract);
+        log_delegator("mario".to_string(), &emulator.contract);
     }
 
     #[test]
