@@ -401,4 +401,8 @@ impl StakingContract {
     pub(crate) fn internal_remove_reward_account(&mut self, account_id: &AccountId){
         self.reward_accounts.remove(account_id);
     }
+
+    pub(crate) fn internal_get_reward_account_or_none(&self, account_id: &AccountId) -> Option<DelegatorRewardAccount>{
+        return self.reward_accounts.get(account_id);
+    }
 }
