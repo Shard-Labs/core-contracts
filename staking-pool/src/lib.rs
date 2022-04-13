@@ -442,6 +442,17 @@ impl StakingContract {
         return self.reward_accounts.len();
     }
 
+    pub fn get_rewards(&self) -> Balance{
+        let account_id = env::predecessor_account_id();
+        let reward_account = self.internal_get_reward_account_or_none(&account_id);
+
+        if reward_account.is_none(){
+            return 0;
+        }else{
+            return reward_account.unwrap().rewards;
+        }
+    }
+
     /*************/
     /* Callbacks */
     /*************/
@@ -947,12 +958,77 @@ mod tests {
     }
 
     #[test]
+    fn test_stake_unstake_all_with_reward_accounts(){
+        let mut emulator = Emulator::new(
+            owner(),
+            "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
+            zero_fee(),
+            Some(20)
+        );
+        let deposit_amount = 10;
+        emulator.update_context(bob(), deposit_amount);
+        emulator.contract.deposit_and_stake();
+        emulator.amount += deposit_amount;
+        emulator.simulate_stake_call();
+        log_contract(&emulator.contract);
+        log_delegator(bob(), &emulator.contract);
+        assert_eq!(
+            emulator.contract.get_account_staked_balance(bob()).0,
+            deposit_amount
+        );
+        assert_eq!(emulator.contract.get_account_unstaked_balance(bob()).0, 0);
+        let mut locked_amount = emulator.locked_amount;
+
+        // 10 epochs later, unstake all.
+        emulator.skip_epochs(10);        
+        // Overriding rewards
+        let rewards = 10;
+        emulator.locked_amount = locked_amount + rewards;
+        emulator.update_context(bob(), 0);
+        emulator.contract.ping();
+        log_contract(&emulator.contract);
+        log_delegator(bob(), &emulator.contract);
+        // Check if logic is correct, (staked balance is stake shares * total staked balance / total stake shares)
+        assert_eq!(emulator.contract.get_account_staked_balance(bob()).0, deposit_amount + 5);
+        // acc total balance is staked + unstaked balance
+        assert_eq!(emulator.contract.get_account_total_balance(bob()).0, deposit_amount + 5);
+        
+        emulator.update_context(alice(), deposit_amount);
+        emulator.contract.deposit_and_stake();
+        emulator.amount += deposit_amount;
+        emulator.simulate_stake_call();
+        assert_eq!(emulator.contract.get_account_staked_balance(alice()).0, 9);
+        log_contract(&emulator.contract);
+        log_delegator(alice(), &emulator.contract);
+        log_delegator(bob(), &emulator.contract);
+        
+        // Make rewards and override them
+        locked_amount = emulator.locked_amount;
+        emulator.skip_epochs(10);
+        emulator.locked_amount = locked_amount + rewards;
+        emulator.update_context(alice(), 0);
+        emulator.contract.ping();
+        log_contract(&emulator.contract);
+
+        emulator.update_context(bob(), 0);
+        log_delegator(alice(), &emulator.contract);
+        log_delegator(bob(), &emulator.contract);
+        emulator.contract.unstake_all();
+        emulator.simulate_stake_call();
+        assert_eq!(emulator.contract.get_account_staked_balance(bob()).0, 0);
+        assert_eq!(
+            emulator.contract.get_account_unstaked_balance(bob()).0,
+            deposit_amount + 9
+        );
+     }
+
+    #[test]
     fn test_shares(){
         let mut emulator = Emulator::new(
             owner(),
             "KuTCtARNzxZQ3YvXDeLjx83FDqxv2SdQTSbiq876zR7".to_string(),
             zero_fee(),
-            Some(100)
+            Some(110)
         );
 
         log_contract(&emulator.contract);
@@ -963,29 +1039,30 @@ mod tests {
         emulator.amount+=10;
         log_contract(&emulator.contract);
 
-        println!("Alice stakes 5");
-        emulator.contract.stake(5.into());
+        println!("Alice stakes 10");
+        emulator.contract.stake(10.into());
         emulator.simulate_stake_call();
         log_contract(&emulator.contract);
-
         log_delegator(alice(), &emulator.contract);
+        
         println!("Bob deposits 50");
         emulator.update_context(bob(), 50);
         emulator.contract.deposit();
-        emulator.amount+=50;
+        emulator.amount += 50;
         log_contract(&emulator.contract);
+
         println!("Bob stakes 20");
         emulator.contract.stake(20.into());
         log_delegator(bob(), &emulator.contract);
         log_contract(&emulator.contract);
         emulator.simulate_stake_call();
+
         println!("Change epoch");
         emulator.skip_epochs(10);
         emulator.update_context(alice(), 0);
         log_contract(&emulator.contract);
         emulator.contract.ping();
         emulator.update_context(alice(), 0);
-
         log_contract(&emulator.contract);
         log_delegator(alice(), &emulator.contract);
 
@@ -993,14 +1070,22 @@ mod tests {
         emulator.update_context("mario".to_string(), 50);
         emulator.amount += 50;
         emulator.contract.deposit_and_stake_with_rewards_to_different_account("mario2".to_string());
-        log_contract(&emulator.contract);
-        emulator.skip_epochs(20);
         emulator.simulate_stake_call();
-        emulator.contract.ping();
+        log_contract(&emulator.contract);
+        println!("skip 20");
+        emulator.skip_epochs(20);
         emulator.update_context(alice(), 0);
+        
+        //let total_reward_after_epoch = emulator.locked_amount - emulator.contract.total_staked_balance;
+        //emulator.contract.internal_get_account("mario").stake_shares
+        //
+        //emulator.contract.internal_get_reward_account_or_none("mario").unwrap()
 
         log_contract(&emulator.contract);
-        log_delegator("mario".to_string(), &emulator.contract);
+        emulator.contract.ping();
+        
+        log_contract(&emulator.contract);
+        emulator.update_context(alice(), 0);
     }
 
     #[test]

@@ -26,9 +26,10 @@ pub fn log_contract(contract: &StakingContract){
 
 pub fn log_delegator(account_id:AccountId, contract: &StakingContract){
     let account = contract.internal_get_account(&account_id);
+    let human_readable_account = contract.get_account(account_id.clone());
     println!(
-        "{} Shares: {}, UnStaked Balance: {}",
-        account_id, account.stake_shares, account.unstaked
+        "{} Shares: {}, UnStaked Balance: {}, Staked balance: {}",
+        account_id, account.stake_shares, account.unstaked, human_readable_account.staked_balance.0
     );
 }
 
