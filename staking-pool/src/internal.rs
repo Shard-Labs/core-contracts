@@ -13,7 +13,8 @@ impl StakingContract {
         // Stakes with the staking public key. If the public key is invalid the entire function
         // call will be rolled back.
         Promise::new(env::current_account_id())
-            .stake(self.total_staked_balance, self.stake_public_key.clone())
+            .stake(self.rewards_staked_staking_pool.get_total_staked_balance() 
+                + self.rewards_not_staked_staking_pool.get_total_staked_balance(), self.stake_public_key.clone())
             .then(ext_self::on_stake_action(
                 &env::current_account_id(),
                 NO_DEPOSIT,
@@ -21,12 +22,13 @@ impl StakingContract {
             ));
     }
 
-    pub(crate) fn internal_deposit(&mut self) -> u128 {
+    pub(crate) fn internal_deposit(&mut self, should_staking_pool_restake_rewards: bool) -> u128 {
         let account_id = env::predecessor_account_id();
-        let mut account = self.internal_get_account(&account_id);
+        let staking_pool = self.get_staking_pool_or_create(&account_id, should_staking_pool_restake_rewards);
+        let mut account = staking_pool.internal_get_account(&account_id);
         let amount = env::attached_deposit();
         account.unstaked += amount;
-        self.internal_save_account(&account_id, &account);
+        staking_pool.internal_save_account(&account_id, &account);
         self.last_total_balance += amount;
 
         env::log(
@@ -43,7 +45,7 @@ impl StakingContract {
         assert!(amount > 0, "Withdrawal amount should be positive");
 
         let account_id = env::predecessor_account_id();
-        let mut account = self.internal_get_account(&account_id);
+        let mut account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
         assert!(
             account.unstaked >= amount,
             "Not enough unstaked balance to withdraw"
@@ -53,7 +55,7 @@ impl StakingContract {
             "The unstaked balance is not yet available due to unstaking delay"
         );
         account.unstaked -= amount;
-        self.internal_save_account(&account_id, &account);
+        self.rewards_staked_staking_pool.internal_save_account(&account_id, &account);
 
         env::log(
             format!(
@@ -71,11 +73,12 @@ impl StakingContract {
         assert!(amount > 0, "Staking amount should be positive");
 
         let account_id = env::predecessor_account_id();
-        let mut account = self.internal_get_account(&account_id);
+        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
+        let mut account = staking_pool.internal_get_account(&account_id);
 
         // Calculate the number of "stake" shares that the account will receive for staking the
         // given amount.
-        let num_shares = self.num_shares_from_staked_amount_rounded_down(amount);
+        let num_shares = staking_pool.num_shares_from_staked_amount_rounded_down(amount);
         assert!(
             num_shares > 0,
             "The calculated number of \"stake\" shares received for staking should be positive"
@@ -83,7 +86,7 @@ impl StakingContract {
         // The amount of tokens the account will be charged from the unstaked balance.
         // Rounded down to avoid overcharging the account to guarantee that the account can always
         // unstake at least the same amount as staked.
-        let charge_amount = self.staked_amount_from_num_shares_rounded_down(num_shares);
+        let charge_amount = staking_pool.staked_amount_from_num_shares_rounded_down(num_shares);
         assert!(
             charge_amount > 0,
             "Invariant violation. Calculated staked amount must be positive, because \"stake\" share price should be at least 1"
@@ -95,15 +98,15 @@ impl StakingContract {
         );
         account.unstaked -= charge_amount;
         account.stake_shares += num_shares;
-        self.internal_save_account(&account_id, &account);
+        staking_pool.internal_save_account(&account_id, &account);
 
         // The staked amount that will be added to the total to guarantee the "stake" share price
         // never decreases. The difference between `stake_amount` and `charge_amount` is paid
         // from the allocated STAKE_SHARE_PRICE_GUARANTEE_FUND.
-        let stake_amount = self.staked_amount_from_num_shares_rounded_up(num_shares);
+        let stake_amount = staking_pool.staked_amount_from_num_shares_rounded_up(num_shares);
 
-        self.total_staked_balance += stake_amount;
-        self.total_stake_shares += num_shares;
+        staking_pool.total_staked_balance += stake_amount;
+        staking_pool.total_stake_shares += num_shares;
 
         env::log(
             format!(
@@ -115,7 +118,7 @@ impl StakingContract {
         env::log(
             format!(
                 "Contract total staked balance is {}. Total number of shares {}",
-                self.total_staked_balance, self.total_stake_shares
+                staking_pool.total_staked_balance, staking_pool.total_stake_shares
             )
             .as_bytes(),
         );
@@ -125,15 +128,16 @@ impl StakingContract {
         assert!(amount > 0, "Unstaking amount should be positive");
 
         let account_id = env::predecessor_account_id();
-        let mut account = self.internal_get_account(&account_id);
+        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
+        let mut account = staking_pool.internal_get_account(&account_id);
 
         assert!(
-            self.total_staked_balance > 0,
+            staking_pool.total_staked_balance > 0,
             "The contract doesn't have staked balance"
         );
         // Calculate the number of shares required to unstake the given amount.
         // NOTE: The number of shares the account will pay is rounded up.
-        let num_shares = self.num_shares_from_staked_amount_rounded_up(amount);
+        let num_shares = staking_pool.num_shares_from_staked_amount_rounded_up(amount);
         assert!(
             num_shares > 0,
             "Invariant violation. The calculated number of \"stake\" shares for unstaking should be positive"
@@ -145,7 +149,7 @@ impl StakingContract {
 
         // Calculating the amount of tokens the account will receive by unstaking the corresponding
         // number of "stake" shares, rounding up.
-        let receive_amount = self.staked_amount_from_num_shares_rounded_up(num_shares);
+        let receive_amount = staking_pool.staked_amount_from_num_shares_rounded_up(num_shares);
         assert!(
             receive_amount > 0,
             "Invariant violation. Calculated staked amount must be positive, because \"stake\" share price should be at least 1"
@@ -154,15 +158,15 @@ impl StakingContract {
         account.stake_shares -= num_shares;
         account.unstaked += receive_amount;
         account.unstaked_available_epoch_height = env::epoch_height() + NUM_EPOCHS_TO_UNLOCK;
-        self.internal_save_account(&account_id, &account);
+        staking_pool.internal_save_account(&account_id, &account);
 
         // The amount tokens that will be unstaked from the total to guarantee the "stake" share
         // price never decreases. The difference between `receive_amount` and `unstake_amount` is
         // paid from the allocated STAKE_SHARE_PRICE_GUARANTEE_FUND.
-        let unstake_amount = self.staked_amount_from_num_shares_rounded_down(num_shares);
+        let unstake_amount = staking_pool.staked_amount_from_num_shares_rounded_down(num_shares);
 
-        self.total_staked_balance -= unstake_amount;
-        self.total_stake_shares -= num_shares;
+        staking_pool.total_staked_balance -= unstake_amount;
+        staking_pool.total_stake_shares -= num_shares;
 
         env::log(
             format!(
@@ -174,7 +178,7 @@ impl StakingContract {
         env::log(
             format!(
                 "Contract total staked balance is {}. Total number of shares {}",
-                self.total_staked_balance, self.total_stake_shares
+                staking_pool.total_staked_balance, staking_pool.total_stake_shares
             )
             .as_bytes(),
         );
@@ -216,27 +220,35 @@ impl StakingContract {
 
             // Distributing the remaining reward to the delegators first.
             let remaining_reward = total_reward - owners_fee;
-            self.total_staked_balance += remaining_reward;
+
+            // Split the remaining reward between the two pools
+            // First calculate the reward for the pool that doesnt restake
+            let reward_for_not_staking = (U256::from(self.rewards_not_staked_staking_pool.staking_pool.total_staked_balance) * U256::from(remaining_reward)
+                / U256::from(self.rewards_not_staked_staking_pool.staking_pool.total_staked_balance 
+                    + self.rewards_staked_staking_pool.total_staked_balance)).as_u128();
+            
+            self.rewards_not_staked_staking_pool.total_rewards += reward_for_not_staking;
+            self.rewards_staked_staking_pool.total_staked_balance += remaining_reward - reward_for_not_staking;
 
             // Now buying "stake" shares for the contract owner at the new share price.
-            let num_shares = self.num_shares_from_staked_amount_rounded_down(owners_fee);
+            let num_shares = self.rewards_staked_staking_pool.num_shares_from_staked_amount_rounded_down(owners_fee);
             if num_shares > 0 {
                 // Updating owner's inner account
                 let owner_id = self.owner_id.clone();
-                let mut account = self.internal_get_account(&owner_id);
+                let mut account = self.rewards_staked_staking_pool.internal_get_account(&owner_id);
                 account.stake_shares += num_shares;
-                self.internal_save_account(&owner_id, &account);
+                self.rewards_staked_staking_pool.internal_save_account(&owner_id, &account);
                 // Increasing the total amount of "stake" shares.
-                self.total_stake_shares += num_shares;
+                self.rewards_staked_staking_pool.total_stake_shares += num_shares;
             }
             // Increasing the total staked balance by the owners fee, no matter whether the owner
             // received any shares or not.
-            self.total_staked_balance += owners_fee;
+            self.rewards_staked_staking_pool.total_staked_balance += owners_fee;
 
             env::log(
                 format!(
                     "Epoch {}: Contract received total rewards of {} tokens. New total staked balance is {}. Total number of shares {}",
-                    epoch_height, total_reward, self.total_staked_balance, self.total_stake_shares,
+                    epoch_height, total_reward, self.rewards_staked_staking_pool.total_staked_balance, self.rewards_staked_staking_pool.total_stake_shares,
                 )
                     .as_bytes(),
             );
@@ -249,6 +261,57 @@ impl StakingContract {
         true
     }
 
+    /// Register account to which staking pool it belongs
+    pub(crate) fn internal_register_account_to_staking_pool(&mut self, account_id: &AccountId, do_stake_rewards: bool){
+        self.account_pool_register.insert(account_id, &do_stake_rewards);
+    }
+
+    /// Get staking pool for account id, if its not present create it
+    /// based on client intention, if he wants his rewards to be restaked or not
+    pub(crate) fn get_staking_pool_or_create(&mut self, account_id: &AccountId, should_staking_pool_restake_rewards: bool) -> &mut InnerStakingPool{
+        let account_staking_pool_option = self.account_pool_register.get(&account_id);
+
+        if account_staking_pool_option.is_none(){
+            self.internal_register_account_to_staking_pool(account_id, should_staking_pool_restake_rewards);
+        }
+
+        if account_staking_pool_option.unwrap_or(should_staking_pool_restake_rewards) {
+            return &mut self.rewards_staked_staking_pool;
+        }else{
+            return &mut self.rewards_not_staked_staking_pool.staking_pool;
+        }
+    }
+
+    /// Get staking pool for account id, if not present throw an error
+    pub(crate) fn get_staking_pool_or_assert_if_not_present(&mut self, account_id: &AccountId) -> &mut InnerStakingPool{
+        let account_staking_pool_option = self.account_pool_register.get(&account_id);
+        assert!(account_staking_pool_option.is_some(), "Account should be registered for one of the staking pools");
+
+        if account_staking_pool_option.unwrap() {
+            return &mut self.rewards_staked_staking_pool;
+        }else{
+            return &mut self.rewards_not_staked_staking_pool.staking_pool;
+        }
+    }
+}
+
+impl InnerStakingPool{
+
+    /// Constructor
+    pub fn new(
+        stake_shares: NumStakeShares,
+        staked_balance: Balance
+    ) -> Self{
+        let this = Self{
+            accounts: UnorderedMap::new(b"u".to_vec()),
+            total_stake_shares: stake_shares,
+            total_staked_balance: staked_balance
+        };
+
+        return this;
+    }
+
+    /// Calculate stake shares in the internal staking pool
     /// Returns the number of "stake" shares rounded down corresponding to the given staked balance
     /// amount.
     ///
@@ -271,6 +334,20 @@ impl StakingContract {
         .as_u128()
     }
 
+    /// Returns the staked amount rounded down corresponding to the given number of "stake" shares.
+    pub(crate) fn staked_amount_from_num_shares_rounded_down(
+        &self,
+        num_shares: NumStakeShares,
+    ) -> Balance {
+        assert!(
+            self.total_stake_shares > 0,
+            "The total number of stake shares can't be 0"
+        );
+        (U256::from(self.total_staked_balance) * U256::from(num_shares)
+            / U256::from(self.total_stake_shares))
+        .as_u128()
+    }
+
     /// Returns the number of "stake" shares rounded up corresponding to the given staked balance
     /// amount.
     ///
@@ -286,20 +363,6 @@ impl StakingContract {
         ((U256::from(self.total_stake_shares) * U256::from(amount)
             + U256::from(self.total_staked_balance - 1))
             / U256::from(self.total_staked_balance))
-        .as_u128()
-    }
-
-    /// Returns the staked amount rounded down corresponding to the given number of "stake" shares.
-    pub(crate) fn staked_amount_from_num_shares_rounded_down(
-        &self,
-        num_shares: NumStakeShares,
-    ) -> Balance {
-        assert!(
-            self.total_stake_shares > 0,
-            "The total number of stake shares can't be 0"
-        );
-        (U256::from(self.total_staked_balance) * U256::from(num_shares)
-            / U256::from(self.total_stake_shares))
         .as_u128()
     }
 
@@ -333,5 +396,28 @@ impl StakingContract {
         } else {
             self.accounts.remove(account_id);
         }
+    }
+}
+
+impl InnerStakingPoolWithoutRewardsRestaked{
+    // Constructor
+    pub fn new() -> Self{
+        return Self {
+            staking_pool: InnerStakingPool::new(0, 0),
+            total_rewards: 0,
+            accounts_deposit: UnorderedMap::new(b"d".to_vec()),
+        };
+    }
+}
+
+impl StakingPool for InnerStakingPool{
+    fn get_total_staked_balance(&self) -> Balance{
+        return self.total_staked_balance;
+    }
+}
+
+impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
+    fn get_total_staked_balance(&self) -> Balance{
+        return self.staking_pool.total_staked_balance;
     }
 }

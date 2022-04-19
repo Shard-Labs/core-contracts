@@ -98,16 +98,15 @@ pub struct StakingContract {
     pub last_epoch_height: EpochHeight,
     /// The last total balance of the account (consists of staked and unstaked balances).
     pub last_total_balance: Balance,
-    /// The total amount of shares. It should be equal to the total amount of shares across all
-    /// accounts.
-    pub total_stake_shares: NumStakeShares,
-    /// The total staked balance.
-    pub total_staked_balance: Balance,
     /// The fraction of the reward that goes to the owner of the staking pool for running the
     /// validator node.
     pub reward_fee_fraction: RewardFeeFraction,
-    /// Persistent map from an account ID to the corresponding account.
-    pub accounts: UnorderedMap<AccountId, Account>,
+    /// Inner staking pool, that restakes the received rewards
+    pub rewards_staked_staking_pool: InnerStakingPool,
+    /// Inner staking pool for accounts that provided different delegator address
+    pub rewards_not_staked_staking_pool: InnerStakingPoolWithoutRewardsRestaked,
+    /// Map showing whether account has his rewards staked or unstaked
+    pub account_pool_register: UnorderedMap<AccountId, bool>,
     /// Whether the staking is paused.
     /// When paused, the account unstakes everything (stakes 0) and doesn't restake.
     /// It doesn't affect the staking shares or reward distribution.
@@ -120,6 +119,32 @@ impl Default for StakingContract {
     fn default() -> Self {
         env::panic(b"Staking contract should be initialized before usage")
     }
+}
+
+/// Structure containing information for accounts that have their rewards restaked
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct InnerStakingPool{
+    /// The total amount of shares the staking pool has across the contract
+    pub total_stake_shares: NumStakeShares,
+    /// The total staked balance.
+    pub total_staked_balance: Balance,
+    /// Persistent map from an account ID to the corresponding account.
+    pub accounts: UnorderedMap<AccountId, Account>,
+}
+
+pub trait StakingPool{
+    fn get_total_staked_balance(&self) -> Balance;
+}
+
+/// Structure containing information for accounts that have their rewards not being restaked
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct InnerStakingPoolWithoutRewardsRestaked{
+    pub staking_pool: InnerStakingPool,
+    /// Pool total rewards
+    pub total_rewards: Balance,
+    /// Accounts deposit, it would be used when calculating how much of the total rewards is for each account
+    /// and also how much of the total staked balance can be unstaked
+    pub accounts_deposit: UnorderedMap<AccountId, Balance>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
@@ -189,15 +214,18 @@ impl StakingContract {
             0,
             "The staking pool shouldn't be staking at the initialization"
         );
+            
         let mut this = Self {
             owner_id,
             stake_public_key: stake_public_key.into(),
             last_epoch_height: env::epoch_height(),
             last_total_balance: account_balance,
-            total_staked_balance,
-            total_stake_shares: NumStakeShares::from(total_staked_balance),
-            reward_fee_fraction,
-            accounts: UnorderedMap::new(b"u".to_vec()),
+            reward_fee_fraction: reward_fee_fraction,
+            rewards_staked_staking_pool: InnerStakingPool::new(
+                NumStakeShares::from(total_staked_balance),
+                total_staked_balance),
+            rewards_not_staked_staking_pool: InnerStakingPoolWithoutRewardsRestaked::new(),
+            account_pool_register: UnorderedMap::new(b"a".to_vec()),
             paused: false,
         };
         // Staking with the current pool to make sure the staking key is valid.
@@ -217,7 +245,7 @@ impl StakingContract {
     pub fn deposit(&mut self) {
         let need_to_restake = self.internal_ping();
 
-        self.internal_deposit();
+        self.internal_deposit(true);
 
         if need_to_restake {
             self.internal_restake();
@@ -229,7 +257,16 @@ impl StakingContract {
     pub fn deposit_and_stake(&mut self) {
         self.internal_ping();
 
-        let amount = self.internal_deposit();
+        let amount = self.internal_deposit(true);
+        self.internal_stake(amount);
+
+        self.internal_restake();
+    }
+
+    pub fn deposit_and_stake_rewards_not_stake(&mut self){
+        self.internal_ping();
+
+        let amount = self.internal_deposit(false);
         self.internal_stake(amount);
 
         self.internal_restake();
@@ -241,7 +278,7 @@ impl StakingContract {
         let need_to_restake = self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let account = self.internal_get_account(&account_id);
+        let account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
         self.internal_withdraw(account.unstaked);
 
         if need_to_restake {
@@ -268,7 +305,8 @@ impl StakingContract {
         self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let account = self.internal_get_account(&account_id);
+        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
+        let account = staking_pool.internal_get_account(&account_id);
         self.internal_stake(account.unstaked);
 
         self.internal_restake();
@@ -293,8 +331,8 @@ impl StakingContract {
         self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let account = self.internal_get_account(&account_id);
-        let amount = self.staked_amount_from_num_shares_rounded_down(account.stake_shares);
+        let account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
+        let amount = self.rewards_staked_staking_pool.staked_amount_from_num_shares_rounded_down(account.stake_shares);
         self.inner_unstake(amount);
 
         self.internal_restake();
@@ -342,7 +380,7 @@ impl StakingContract {
 
     /// Returns the total staking balance.
     pub fn get_total_staked_balance(&self) -> U128 {
-        self.total_staked_balance.into()
+        self.rewards_staked_staking_pool.total_staked_balance.into()
     }
 
     /// Returns account ID of the staking pool owner.
@@ -367,11 +405,12 @@ impl StakingContract {
 
     /// Returns human readable representation of the account for the given account ID.
     pub fn get_account(&self, account_id: AccountId) -> HumanReadableAccount {
-        let account = self.internal_get_account(&account_id);
+        let account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
         HumanReadableAccount {
             account_id,
             unstaked_balance: account.unstaked.into(),
             staked_balance: self
+                .rewards_staked_staking_pool
                 .staked_amount_from_num_shares_rounded_down(account.stake_shares)
                 .into(),
             can_withdraw: account.unstaked_available_epoch_height <= env::epoch_height(),
@@ -380,12 +419,12 @@ impl StakingContract {
 
     /// Returns the number of accounts that have positive balance on this staking pool.
     pub fn get_number_of_accounts(&self) -> u64 {
-        self.accounts.len()
+        self.rewards_staked_staking_pool.accounts.len()
     }
 
     /// Returns the list of accounts
     pub fn get_accounts(&self, from_index: u64, limit: u64) -> Vec<HumanReadableAccount> {
-        let keys = self.accounts.keys_as_vector();
+        let keys = self.rewards_staked_staking_pool.accounts.keys_as_vector();
 
         (from_index..std::cmp::min(from_index + limit, keys.len()))
             .map(|index| self.get_account(keys.get(index).unwrap()))
@@ -525,8 +564,8 @@ mod tests {
                 Base58PublicKey::try_from(stake_public_key).unwrap(),
                 reward_fee_fraction,
             );
-            let last_total_staked_balance = contract.total_staked_balance;
-            let last_total_stake_shares = contract.total_stake_shares;
+            let last_total_staked_balance = contract.rewards_staked_staking_pool.total_staked_balance;
+            let last_total_stake_shares = contract.rewards_staked_staking_pool.total_stake_shares;
             Emulator {
                 contract,
                 epoch_height: 0,
@@ -539,8 +578,8 @@ mod tests {
         }
 
         fn verify_stake_price_increase_guarantee(&mut self) {
-            let total_staked_balance = self.contract.total_staked_balance;
-            let total_stake_shares = self.contract.total_stake_shares;
+            let total_staked_balance = self.contract.rewards_staked_staking_pool.total_staked_balance;
+            let total_stake_shares = self.contract.rewards_staked_staking_pool.total_stake_shares;
             assert!(
                 U256::from(total_staked_balance) * U256::from(self.last_total_stake_shares)
                     >= U256::from(self.last_total_staked_balance) * U256::from(total_stake_shares),
@@ -569,7 +608,7 @@ mod tests {
         }
 
         pub fn simulate_stake_call(&mut self) {
-            let total_stake = self.contract.total_staked_balance;
+            let total_stake = self.contract.rewards_staked_staking_pool.total_staked_balance;
             // Stake action
             self.amount = self.amount + self.locked_amount - total_stake;
             self.locked_amount = total_stake;
