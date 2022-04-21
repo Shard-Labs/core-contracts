@@ -66,6 +66,10 @@ pub struct HumanReadableAccount {
     pub staked_balance: U128,
     /// Whether the unstaked balance is available for withdrawal now.
     pub can_withdraw: bool,
+    /// Rewards showing information for those accounts
+    /// that have their tokens delegated to a pool which
+    /// doesnt restake its rewards
+    pub rewards_for_withdraw: U128,
 }
 
 impl Default for Account {
@@ -134,17 +138,52 @@ pub struct InnerStakingPool{
 
 pub trait StakingPool{
     fn get_total_staked_balance(&self) -> Balance;
+    fn deposit(&mut self, account_id: &AccountId, amount: Balance);
+    fn stake(&mut self, account_id: &AccountId, amount: Balance);
+    fn withdraw(&mut self, account_id: &AccountId, amount: Balance);
+    fn unstake(&mut self, account_id: &AccountId, amount: Balance);
+    fn get_account_unstaked_balance(&self, account_id: &AccountId) -> Balance;
+    fn get_account_info(&self, account_id: &AccountId) -> HumanReadableAccount;
+    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId, receiver_account_id: &AccountId);
 }
 
+/// Inner account data of a delegate.
+#[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+pub struct AccountWithReward{
+    /// The unstaked balance. It represents the amount the account has on this contract that
+    /// can either be staked or withdrawn.
+    pub unstaked: Balance,
+    /// The amount of "stake" shares. Every stake share corresponds to the amount of staked balance.
+    /// NOTE: The number of shares should always be less or equal than the amount of staked balance.
+    /// This means the price of stake share should always be at least `1`.
+    /// The price of stake share can be computed as `total_staked_balance` / `total_stake_shares`.
+    pub stake: Balance,
+    /// The minimum epoch height when the withdrawn is allowed.
+    /// This changes after unstaking action, because the amount is still locked for 3 epochs.
+    pub unstaked_available_epoch_height: EpochHeight,
+    /// The reward that has been paid to the account
+    pub reward_tally: Balance,
+}
+
+impl Default for AccountWithReward {
+    fn default() -> Self {
+        Self {
+            unstaked: 0,
+            stake: 0,
+            unstaked_available_epoch_height: 0,
+            reward_tally: 0
+        }
+    }
+}
 /// Structure containing information for accounts that have their rewards not being restaked
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct InnerStakingPoolWithoutRewardsRestaked{
-    pub staking_pool: InnerStakingPool,
-    /// Pool total rewards
-    pub total_rewards: Balance,
+    pub accounts: UnorderedMap<AccountId, AccountWithReward>,
+    /// Pool total staked balance
+    pub total_staked_balance: Balance,
     /// Accounts deposit, it would be used when calculating how much of the total rewards is for each account
     /// and also how much of the total staked balance can be unstaked
-    pub accounts_deposit: UnorderedMap<AccountId, Balance>,
+    pub reward_per_token: Fraction,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
@@ -165,6 +204,70 @@ impl RewardFeeFraction {
 
     pub fn multiply(&self, value: Balance) -> Balance {
         (U256::from(self.numerator) * U256::from(value) / U256::from(self.denominator)).as_u128()
+    }
+}
+
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct Fraction{
+    pub numerator: u128,
+    pub denominator: u128,
+}
+
+impl Fraction{
+    pub fn new(
+        numerator: u128, 
+        denominator: u128
+    )-> Self{
+        assert!((denominator == 0 && numerator == 0) 
+        || (denominator != 0 && numerator != 0), "Denominator can only be 0 if numerator is 0");
+
+        return Self{
+            numerator: numerator,
+            denominator: denominator
+        };
+    }
+    pub fn add(&mut self, value: &Fraction)-> &mut Self{       
+        // Finding greatest common divisor of the two denominators
+        let gcd = self.greatest_common_divisior(self.denominator,value.denominator);      
+        let new_denominator = (self.denominator * value.denominator) / gcd;
+    
+        // Changing the fractions to have same denominator
+        // Numerator of the final fraction obtained
+        self.numerator = (self.numerator) * (new_denominator / self.denominator) 
+                + (value.numerator) * (new_denominator / value.denominator);
+        self.denominator = new_denominator;
+        // Calling function to convert final fraction
+        // into it's simplest form
+        self.simple_form();
+
+        return self;
+    }
+
+    pub fn multiply(&self, value: Balance) -> Balance {
+        if self.numerator == 0 && self.denominator == 0 {
+            return 0;
+        }
+
+        return (U256::from(self.numerator) * U256::from(value) / U256::from(self.denominator)).as_u128()
+    }
+
+    fn simple_form(&mut self) -> &Self{
+        let common_factor = self.greatest_common_divisior(self.numerator, self.denominator);
+        self.denominator = self.denominator/common_factor;
+        self.numerator = self.numerator/common_factor;
+
+        return self;
+    }
+
+    fn greatest_common_divisior(
+        &self, 
+        a: u128, 
+        b: u128
+    ) -> u128{
+        if a == 0{
+            return b;
+        }
+        return self.greatest_common_divisior(b%a, a);
     }
 }
 
@@ -306,8 +409,8 @@ impl StakingContract {
 
         let account_id = env::predecessor_account_id();
         let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
-        let account = staking_pool.internal_get_account(&account_id);
-        self.internal_stake(account.unstaked);
+        let unstaked_balance = staking_pool.get_account_unstaked_balance(&account_id);
+        self.internal_stake(unstaked_balance);
 
         self.internal_restake();
     }
@@ -349,6 +452,12 @@ impl StakingContract {
         self.inner_unstake(amount);
 
         self.internal_restake();
+    }
+
+    pub fn withdraw_rewards(&mut self, receiver_account_id: AccountId){
+        let account_id = env::predecessor_account_id();
+        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
+        staking_pool.withdraw_not_staked_rewards(&account_id, &receiver_account_id);
     }
 
     /****************/
@@ -405,16 +514,8 @@ impl StakingContract {
 
     /// Returns human readable representation of the account for the given account ID.
     pub fn get_account(&self, account_id: AccountId) -> HumanReadableAccount {
-        let account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
-        HumanReadableAccount {
-            account_id,
-            unstaked_balance: account.unstaked.into(),
-            staked_balance: self
-                .rewards_staked_staking_pool
-                .staked_amount_from_num_shares_rounded_down(account.stake_shares)
-                .into(),
-            can_withdraw: account.unstaked_available_epoch_height <= env::epoch_height(),
-        }
+        let staking_pool = self.get_staking_pool_or_assert(&account_id);
+        return staking_pool.get_account_info(&account_id);
     }
 
     /// Returns the number of accounts that have positive balance on this staking pool.
