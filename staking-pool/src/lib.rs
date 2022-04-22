@@ -144,7 +144,7 @@ pub trait StakingPool{
     fn unstake(&mut self, account_id: &AccountId, amount: Balance);
     fn get_account_unstaked_balance(&self, account_id: &AccountId) -> Balance;
     fn get_account_info(&self, account_id: &AccountId) -> HumanReadableAccount;
-    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId, receiver_account_id: &AccountId);
+    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId) -> Balance;
 }
 
 /// Inner account data of a delegate.
@@ -457,9 +457,12 @@ impl StakingContract {
     }
 
     pub fn withdraw_rewards(&mut self, receiver_account_id: AccountId){
-        let account_id = env::predecessor_account_id();
-        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
-        staking_pool.withdraw_not_staked_rewards(&account_id, &receiver_account_id);
+        let need_to_restake = self.internal_ping();
+        
+        self.internal_withdraw_rewards(&receiver_account_id);
+        if need_to_restake{
+            self.internal_restake();
+        }
     }
 
     /****************/
@@ -522,7 +525,7 @@ impl StakingContract {
 
     /// Returns the number of accounts that have positive balance on this staking pool.
     pub fn get_number_of_accounts(&self) -> u64 {
-        self.rewards_staked_staking_pool.accounts.len()
+        self.rewards_staked_staking_pool.accounts.len() + self.rewards_not_staked_staking_pool.accounts.len()
     }
 
     /// Returns the list of accounts

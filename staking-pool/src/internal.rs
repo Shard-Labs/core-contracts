@@ -33,6 +33,21 @@ impl StakingContract {
         amount
     }
 
+    pub(crate) fn internal_withdraw_rewards(&mut self, receiver_account_id: &AccountId){
+        assert!(
+            env::is_valid_account_id(receiver_account_id.as_bytes()),
+            "The receiver account ID is invalid"
+        );
+        let account_id = env::predecessor_account_id();
+        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
+        let reward = staking_pool.withdraw_not_staked_rewards(&account_id);
+
+        if reward != 0 {
+            Promise::new(receiver_account_id.to_string()).transfer(reward);
+            self.last_total_balance -= reward;
+        }
+    }
+
     pub(crate) fn internal_withdraw(&mut self, amount: Balance) {
         assert!(amount > 0, "Withdrawal amount should be positive");
 
@@ -460,8 +475,9 @@ impl StakingPool for InnerStakingPool{
         }
     }
 
-    fn withdraw_not_staked_rewards(&mut self, _account_id: &AccountId, _receiver_account_id: &AccountId){
+    fn withdraw_not_staked_rewards(&mut self, _account_id: &AccountId) -> Balance{
         // Empty body because this pool doesnt have non staked rewards
+        return 0;
     }
 }
 
@@ -620,15 +636,11 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
         };
     }
 
-    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId, receiver_account_id: &AccountId){
-        assert!(
-            env::is_valid_account_id(receiver_account_id.as_bytes()),
-            "The receiver account ID is invalid"
-        );
+    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId) -> Balance{
         let mut account = self.internal_get_account(&account_id);
         let reward = self.compute_reward(&account);
         account.reward_tally = self.reward_per_token.multiply(account.stake);
 
-        Promise::new(receiver_account_id.to_string()).transfer(reward);
+        return reward;
     }
 }
