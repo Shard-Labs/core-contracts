@@ -511,7 +511,7 @@ impl InnerStakingPoolWithoutRewardsRestaked{
             return;
         }
         assert!(self.total_staked_balance > 0, "Cannot distribute reward when staked balance is 0 or below");
-        self.reward_per_token.add(&Fraction::new(reward, self.total_staked_balance));
+        self.reward_per_token.add(Fraction::new(reward, self.total_staked_balance));
     }
 
     pub(crate) fn compute_reward(&self, account: &AccountWithReward) -> Balance{
