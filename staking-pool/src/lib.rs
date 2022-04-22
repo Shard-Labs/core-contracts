@@ -207,7 +207,7 @@ impl RewardFeeFraction {
     }
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, PartialEq, Eq, Debug)]
 pub struct Fraction{
     pub numerator: u128,
     pub denominator: u128,
@@ -226,7 +226,7 @@ impl Fraction{
             denominator: denominator
         };
     }
-    pub fn add(&mut self, value: &Fraction)-> &mut Self{       
+    pub fn add(&mut self, value: Fraction)-> &mut Self{       
         // Finding greatest common divisor of the two denominators
         let gcd = self.greatest_common_divisior(self.denominator,value.denominator);      
         let new_denominator = (self.denominator * value.denominator) / gcd;
@@ -383,8 +383,8 @@ impl StakingContract {
         let need_to_restake = self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
-        self.internal_withdraw(account.unstaked);
+        let amount = self.get_account_unstaked_balance(account_id);
+        self.internal_withdraw(amount.0);
 
         if need_to_restake {
             self.internal_restake();
@@ -410,9 +410,8 @@ impl StakingContract {
         self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
-        let unstaked_balance = staking_pool.get_account_unstaked_balance(&account_id);
-        self.internal_stake(unstaked_balance);
+        let unstaked_balance = self.get_account_unstaked_balance(account_id);
+        self.internal_stake(unstaked_balance.0);
 
         self.internal_restake();
     }
@@ -436,9 +435,8 @@ impl StakingContract {
         self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let account = self.rewards_staked_staking_pool.internal_get_account(&account_id);
-        let amount = self.rewards_staked_staking_pool.staked_amount_from_num_shares_rounded_down(account.stake_shares);
-        self.inner_unstake(amount);
+        let staked_balance = self.get_account_staked_balance(account_id);
+        self.inner_unstake(staked_balance.0);
 
         self.internal_restake();
     }
@@ -1044,4 +1042,21 @@ mod tests {
             remaining -= amount;
         }
     }
+
+    #[test]
+    fn test_fraction(){
+        let f = Fraction::new(17, 32);
+
+        assert_eq!(f.multiply(43), 22);
+        assert_eq_in_near!(ntoy(50), Fraction::new(1, 2).multiply(ntoy(100)));
+        assert_eq!(*Fraction::new(3, 5).add(Fraction::new(3, 11)), Fraction::new(48, 55));
+
+        let mut f1 = Fraction::new(1, 3);
+        let f2 = Fraction::new(3, 5);
+        f1.add(f2);
+        assert_eq!(f1, Fraction::new(14,15));
+        assert_eq_in_near!(f1.multiply(ntoy(30)), ntoy(28));
+    }
+
+    
 }
