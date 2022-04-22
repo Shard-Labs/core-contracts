@@ -319,7 +319,7 @@ impl StakingContract {
         );
             
         let mut this = Self {
-            owner_id,
+            owner_id: owner_id.clone(),
             stake_public_key: stake_public_key.into(),
             last_epoch_height: env::epoch_height(),
             last_total_balance: account_balance,
@@ -331,6 +331,8 @@ impl StakingContract {
             account_pool_register: UnorderedMap::new(b"a".to_vec()),
             paused: false,
         };
+        // save owner account in pool register
+        this.internal_register_account_to_staking_pool(&owner_id, true);
         // Staking with the current pool to make sure the staking key is valid.
         this.internal_restake();
         this
@@ -803,7 +805,7 @@ mod tests {
         emulator.skip_epochs(10);
         // Overriding rewards (+ 100K reward)
         emulator.locked_amount = locked_amount + ntoy(100_000);
-        emulator.update_context(bob(), 0);
+        emulator.update_context(bob(), 0);    
         emulator.contract.ping();
         let expected_amount = deposit_amount
             + ntoy((yton(deposit_amount) * 90_000 + n_locked_amount / 2) / n_locked_amount);
@@ -822,7 +824,7 @@ mod tests {
         emulator.skip_epochs(10);
         // Overriding rewards (another 100K reward)
         emulator.locked_amount = locked_amount + ntoy(100_000);
-
+        
         emulator.update_context(bob(), 0);
         emulator.contract.ping();
         // previous balance plus (1_090_000 / 1_100_030)% of the 90_000 reward (rounding to nearest).
