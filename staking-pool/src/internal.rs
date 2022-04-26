@@ -40,7 +40,10 @@ impl StakingContract {
         );
         let account_id = env::predecessor_account_id();
         let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
-        let reward = staking_pool.withdraw_not_staked_rewards(&account_id);
+        let (reward, account_should_be_removed) = staking_pool.withdraw_not_staked_rewards(&account_id);
+        if account_should_be_removed {
+            self.account_pool_register.remove(&account_id);
+        }
 
         if reward != 0 {
             Promise::new(receiver_account_id.to_string()).transfer(reward);
@@ -53,7 +56,11 @@ impl StakingContract {
 
         let account_id = env::predecessor_account_id();
         let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
-        staking_pool.withdraw(&account_id, amount);
+        let should_remove_account_from_staking_pool_register = staking_pool.withdraw(&account_id, amount);
+
+        if should_remove_account_from_staking_pool_register{
+            self.account_pool_register.remove(&account_id);
+        }
 
         Promise::new(account_id).transfer(amount);
         self.last_total_balance -= amount;
@@ -297,11 +304,14 @@ impl InnerStakingPool{
 
     /// Inner method to save the given account for a given account ID.
     /// If the account balances are 0, the account is deleted instead to release storage.
-    pub(crate) fn internal_save_account(&mut self, account_id: &AccountId, account: &Account) {
+    /// Returns true or false, wether an element has been removed
+    pub(crate) fn internal_save_account(&mut self, account_id: &AccountId, account: &Account) -> bool{
         if account.unstaked > 0 || account.stake_shares > 0 {
             self.accounts.insert(account_id, &account);
+            return false;
         } else {
             self.accounts.remove(account_id);
+            return true;
         }
     }
 }
@@ -380,7 +390,7 @@ impl StakingPool for InnerStakingPool{
         );
     }
 
-    fn withdraw(&mut self, account_id: &AccountId, amount: Balance){
+    fn withdraw(&mut self, account_id: &AccountId, amount: Balance) -> bool{
         let mut account = self.internal_get_account(&account_id);
         assert!(
             account.unstaked >= amount,
@@ -391,7 +401,7 @@ impl StakingPool for InnerStakingPool{
             "The unstaked balance is not yet available due to unstaking delay"
         );
         account.unstaked -= amount;
-        self.internal_save_account(&account_id, &account);
+        let account_has_been_removed = self.internal_save_account(&account_id, &account);
 
         env::log(
             format!(
@@ -400,6 +410,8 @@ impl StakingPool for InnerStakingPool{
             )
             .as_bytes(),
         );
+
+        return account_has_been_removed;
     }
 
     fn unstake(&mut self, account_id: &AccountId, amount: Balance){
@@ -475,9 +487,9 @@ impl StakingPool for InnerStakingPool{
         }
     }
 
-    fn withdraw_not_staked_rewards(&mut self, _account_id: &AccountId) -> Balance{
+    fn withdraw_not_staked_rewards(&mut self, _account_id: &AccountId) -> (Balance, bool){
         // Empty body because this pool doesnt have non staked rewards
-        return 0;
+        return (0, false);
     }
 }
 
@@ -498,11 +510,14 @@ impl InnerStakingPoolWithoutRewardsRestaked{
 
     /// Inner method to save the given account for a given account ID.
     /// If the account balances are 0, the account is deleted instead to release storage.
-    pub(crate) fn internal_save_account(&mut self, account_id: &AccountId, account: &AccountWithReward) {
-        if account.unstaked > 0 || account.stake > 0 {
+    /// Returns true or false wether an element has been removed
+    pub(crate) fn internal_save_account(&mut self, account_id: &AccountId, account: &AccountWithReward) -> bool {
+        if account.unstaked > 0 || account.stake > 0 || account.reward_tally > 0 {
             self.accounts.insert(account_id, &account);
+            return false;
         } else {
             self.accounts.remove(account_id);
+            return true;
         }
     }
 
@@ -515,7 +530,11 @@ impl InnerStakingPoolWithoutRewardsRestaked{
     }
 
     pub(crate) fn compute_reward(&self, account: &AccountWithReward) -> Balance{
-        return self.reward_per_token.multiply(account.stake) - account.reward_tally;
+        if account.tally_below_zero {
+            return self.reward_per_token.multiply(account.stake) + account.reward_tally;
+        }else{
+            return self.reward_per_token.multiply(account.stake) - account.reward_tally;
+        }
     }
 }
 
@@ -530,7 +549,7 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
 
         account.unstaked -= amount;
         account.stake += amount;
-        account.reward_tally += self.reward_per_token.multiply(amount);
+        account.add_to_tally(self.reward_per_token.multiply(amount));
         self.total_staked_balance+=amount;
 
         self.internal_save_account(account_id, &account);
@@ -559,7 +578,7 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
         );
     }
 
-    fn withdraw(&mut self, account_id: &AccountId, amount: Balance){
+    fn withdraw(&mut self, account_id: &AccountId, amount: Balance) -> bool{
         let mut account = self.internal_get_account(&account_id);
         assert!(
             account.unstaked >= amount,
@@ -570,7 +589,7 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
             "The unstaked balance is not yet available due to unstaking delay"
         );
         account.unstaked -= amount;
-        self.internal_save_account(&account_id, &account);
+        let account_has_been_removed = self.internal_save_account(&account_id, &account);
 
         env::log(
             format!(
@@ -579,6 +598,8 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
             )
             .as_bytes(),
         );
+
+        return account_has_been_removed;
     }
 
     fn unstake(&mut self, account_id: &AccountId, amount: Balance){
@@ -599,7 +620,7 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
 
         account.stake -= amount;
         account.unstaked += amount;
-        account.reward_tally -= self.reward_per_token.multiply(amount);
+        account.subtract_from_tally(self.reward_per_token.multiply(amount));
         account.unstaked_available_epoch_height = env::epoch_height() + NUM_EPOCHS_TO_UNLOCK;
         self.internal_save_account(&account_id, &account);
 
@@ -636,11 +657,12 @@ impl StakingPool for InnerStakingPoolWithoutRewardsRestaked{
         };
     }
 
-    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId) -> Balance{
+    fn withdraw_not_staked_rewards(&mut self, account_id: &AccountId) -> (Balance, bool){
         let mut account = self.internal_get_account(&account_id);
         let reward = self.compute_reward(&account);
         account.reward_tally = self.reward_per_token.multiply(account.stake);
+        let account_was_removed = self.internal_save_account(&account_id, &account);
 
-        return reward;
+        return (reward, account_was_removed);
     }
 }
