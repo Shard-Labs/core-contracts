@@ -1,4 +1,6 @@
 use crate::*;
+pub mod math;
+use math::Fraction;
 
 impl StakingContract {
     /********************/
@@ -315,7 +317,6 @@ impl InnerStakingPool{
         }
     }
 }
-
 
 impl StakingPool for InnerStakingPool{
     fn get_total_staked_balance(&self) -> Balance{
