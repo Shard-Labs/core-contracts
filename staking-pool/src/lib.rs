@@ -411,6 +411,7 @@ impl StakingContract {
         }
     }
 
+    #[payable]
     pub fn deposit_rewards_not_stake(&mut self){
         let need_to_restake = self.internal_ping();
 
@@ -432,6 +433,7 @@ impl StakingContract {
         self.internal_restake();
     }
 
+    #[payable]
     pub fn deposit_and_stake_rewards_not_stake(&mut self){
         self.internal_ping();
 
