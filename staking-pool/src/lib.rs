@@ -502,7 +502,7 @@ impl StakingContract {
 
     /// Returns human readable representation of the account for the given account ID.
     pub fn get_account(&self, account_id: AccountId) -> HumanReadableAccount {
-        let staking_pool = self.get_staking_pool_or_assert(&account_id);
+        let staking_pool = self.get_staking_pool_or_default(&account_id);
         return staking_pool.get_account_info(&account_id);
     }
 
@@ -761,7 +761,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Account should be registered for one of the staking pools")]
     fn test_deposit_withdraw() {
         let mut emulator = Emulator::new(
             owner(),
