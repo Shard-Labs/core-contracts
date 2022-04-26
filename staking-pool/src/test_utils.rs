@@ -15,6 +15,22 @@ pub fn owner() -> AccountId {
     "owner".to_string()
 }
 
+pub fn A() -> AccountId {
+    "A".to_string()
+}
+pub fn B() -> AccountId {
+    "B".to_string()
+}
+pub fn C() -> AccountId {
+    "C".to_string()
+}
+pub fn D() -> AccountId {
+    "D".to_string()
+}
+pub fn E() -> AccountId {
+    "E".to_string()
+}
+
 pub fn ntoy(near_amount: Balance) -> Balance {
     near_amount * 10u128.pow(24)
 }
