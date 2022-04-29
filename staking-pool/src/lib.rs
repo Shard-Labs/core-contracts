@@ -322,6 +322,8 @@ impl StakingContract {
         }
     }
 
+    /// Deposits the attached amount unto the inner account of the precedessor, but the inner account
+    /// is attached to the staking pool that doesnt restake rewards
     #[payable]
     pub fn deposit_rewards_not_stake(&mut self){
         let need_to_restake = self.internal_ping();
@@ -344,6 +346,8 @@ impl StakingContract {
         self.internal_restake();
     }
 
+    /// Deposits the attached amount into the inner account of the predecessor and stakes it to the inner pool
+    /// that doesnt restake rewards
     #[payable]
     pub fn deposit_and_stake_rewards_not_stake(&mut self){
         self.internal_ping();
@@ -431,6 +435,7 @@ impl StakingContract {
         self.internal_restake();
     }
 
+    /// Withdraw rewards that are being collected for accounts that doesnt restake their rewards
     pub fn withdraw_rewards(&mut self, receiver_account_id: AccountId){
         let need_to_restake = self.internal_ping();
         
