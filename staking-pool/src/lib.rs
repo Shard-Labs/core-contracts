@@ -364,8 +364,9 @@ impl StakingContract {
         let need_to_restake = self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let amount = self.get_account_unstaked_balance(account_id);
+        let amount = self.get_account_unstaked_balance(account_id.clone());
         self.internal_withdraw(amount.0);
+        self.internal_withdraw_rewards(&account_id);
 
         if need_to_restake {
             self.internal_restake();
@@ -1191,6 +1192,8 @@ mod tests {
 
     #[test]
     fn test_stake_two_pools(){
+        let yn = 1876154543331878195788979160;
+        println!("{}", yton(yn));
         let initial_balance = ntoy(100);
         let mut emulator = Emulator::new(
             owner(),
