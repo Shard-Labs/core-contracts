@@ -20,6 +20,7 @@ For secure operation of the staking pool, the contract should not have any acces
 Otherwise the contract account may issue a transaction that can violate the contract guarantees.
 
 After users deposit tokens to the contract, they can stake some or all of them to receive "stake" shares.
+The staking contract uses two internal pools for managing the stake and stake rewards. In the first pool the rewards are being restaked again. In the second pool they are not being restaked, but saved so every user who indicates that he wants his rewards sent to different address, can withdraw them at any time.
 The price of a "stake" share can be defined as the total amount of staked tokens divided by the the total amount of "stake" shares.
 The number of "stake" shares is always less than the number of the staked tokens, so the price of single "stake" share is not less than `1`.
 
@@ -107,8 +108,9 @@ Note, that it might be unfair for the participants of the pool if the owner chan
 participants and it will lose future revenue in the long term. This should be enough to prevent owner from abusing reward fee.
 It could also be the case that they could change the reward fee to make their pool more attractive.
 
-The remaining part of the reward is added to the total staked balance. This action increases the price of each "stake" share without
+The remaining part of the reward is distributed between the two inner pools. The calculation is made by combining the total staked balance of each pool and then distributed using the formula (total staked balance pool A) / (total staked balance pool A + total staked balance pool B). After figuring out what rewards goes to each pool, relative to the pool that staked its reward, the reward is added to the total staked balance of the inner pool, in the case of the other inner pool, that doesnt restake its rewards, the amount of reward is distributed between the accounts in this pool. Using the "Scalable Reward Distribution with Changing Stake Sizes" algorithm (https://solmaz.io/2019/02/24/scalable-reward-changing). For the pool that restakes rewards this action increases the price of each "stake" share without
 changing the amount of "stake" shares owned by different accounts. Which is effectively distributing the reward based on the number of shares.
+For the pool that doesnt restake rewards, the total staked balance remains the same, but the rewards for each account are increased.
 
 The owner's reward is converted into "stake" shares at the new price and added to the owner's account.
 It's done similarly to `stake` method but without debiting the unstaked balance of owner's account.
@@ -146,7 +148,15 @@ NOTE: Guarantees are based on the no-slashing condition. Once slashing is introd
 provide some guarantees. Read more about slashing in [Nightshade paper](https://near.ai/nightshade).
 
 ## Changelog
-
+### `0.5.0`
+- Internal refactoring. Added functionality for not restaking rewards, but saving them so account can withdraw them at any time.
+- Added new delegator methods:
+    - `deposit_rewards_not_stake` - to deposit amount to the inner pool that doesnt restakes its rewards
+    - `deposit_and_stake_rewards_not_stake` - to deposit and stake the attached balance in one call in the inner pool that doesnt restakes it rewards
+    - `withdraw_rewards` - to withdraw all rewards, this method accepts a parameter receiver_account_id which is used for sending the rewards to
+    - `get_account_not_staked_rewards` - returns amount of rewards. If the account has deposited and staked to the pool that doesnt restakes rewards, then it will receive something. Otherwise will receive 0.
+    
+    
 ### `0.4.0`
 
 - Internal refactoring. Moving internal methods to `internal.rs`
@@ -291,6 +301,16 @@ pub fn deposit(&mut self);
 #[payable]
 pub fn deposit_and_stake(&mut self);
 
+/// Deposits the attached amount unto the inner account of the precedessor, but the inner account
+/// is attached to the staking pool that doesnt restake rewards
+#[payable]
+pub fn deposit_rewards_not_stake(&mut self);
+
+/// Deposits the attached amount into the inner account of the predecessor and stakes it to the inner pool
+/// that doesnt restake rewards
+#[payable]
+pub fn deposit_and_stake_rewards_not_stake(&mut self);
+
 /// Withdraws the non staked balance for given account.
 /// It's only allowed if the `unstake` action was not performed in the four most recent epochs.
 pub fn withdraw(&mut self, amount: U128);
@@ -315,9 +335,19 @@ pub fn unstake(&mut self, amount: U128);
 /// The new total unstaked balance will be available for withdrawal in four epochs.
 pub fn unstake_all(&mut self);
 
+/// Returns the rewards for the account, If the account is in the
+/// staking pool that doesnt restake its rewards it will return somethind
+/// If is in the other pool it will return 0
+pub fn get_account_not_staked_rewards(&self, account_id: AccountId) -> U128;
+
 /****************/
 /* View methods */
 /****************/
+
+/// Returns the rewards for the account, If the account is in the
+/// staking pool that doesnt restake its rewards it will return somethind
+/// If is in the other pool it will return 0
+pub fn get_account_not_staked_rewards(&self, account_id: AccountId) -> U128;
 
 /// Returns the unstaked balance of the given account.
 pub fn get_account_unstaked_balance(&self, account_id: AccountId) -> U128;
