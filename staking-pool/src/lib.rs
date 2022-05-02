@@ -364,10 +364,9 @@ impl StakingContract {
         let need_to_restake = self.internal_ping();
 
         let account_id = env::predecessor_account_id();
-        let amount = self.get_account_unstaked_balance(account_id.clone());
-        self.internal_withdraw(amount.0);
-        self.internal_withdraw_rewards(&account_id);
-
+        let amount = self.get_account_unstaked_balance(account_id);
+        self.internal_withdraw(amount.0, false);
+        
         if need_to_restake {
             self.internal_restake();
         }
@@ -379,7 +378,7 @@ impl StakingContract {
         let need_to_restake = self.internal_ping();
 
         let amount: Balance = amount.into();
-        self.internal_withdraw(amount);
+        self.internal_withdraw(amount, false);
 
         if need_to_restake {
             self.internal_restake();
@@ -1181,12 +1180,14 @@ mod tests {
         assert_eq_in_near!(emulator.contract.get_account_unstaked_balance(bob()).0, bob_deposit_amount);
         emulator.skip_epochs(5);
         emulator.update_context(bob(), 0);
-        emulator.contract.withdraw_all();
         println!("Bob rewards {}, rewards in near {}", emulator.contract.get_account_not_staked_rewards(bob()).0,
     yton(emulator.contract.get_account_not_staked_rewards(bob()). 0));
         assert_eq_in_near!(emulator.contract.get_account_not_staked_rewards(bob()).0, rewards * 5 / 10);
-        assert_eq_in_near!(emulator.contract.get_account_staked_balance(bob()).0, 0);
-        assert_eq_in_near!(emulator.contract.get_account_unstaked_balance(bob()).0, 0);
+        emulator.contract.withdraw_all();
+        emulator.update_context(bob(), 0);
+        emulator.contract.withdraw_rewards(bob());
+        assert_eq!(emulator.contract.get_account_staked_balance(bob()).0, 0);
+        assert_eq!(emulator.contract.get_account_unstaked_balance(bob()).0, 0);
     }
 
     #[test]

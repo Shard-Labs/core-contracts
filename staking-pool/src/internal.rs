@@ -53,19 +53,26 @@ impl StakingContract {
         }
     }
 
-    pub(crate) fn internal_withdraw(&mut self, amount: Balance) {
+    pub(crate) fn internal_withdraw(&mut self, amount: Balance, withdraw_rewards: bool) {
         assert!(amount > 0, "Withdrawal amount should be positive");
 
         let account_id = env::predecessor_account_id();
         let staking_pool = self.get_staking_pool_or_assert_if_not_present(&account_id);
-        let should_remove_account_from_staking_pool_register = staking_pool.withdraw(&account_id, amount);
+        let mut total_withdraw = 0u128;
 
+        if withdraw_rewards {
+            let (rewards, _)= staking_pool.withdraw_not_staked_rewards(&account_id);
+            total_withdraw += rewards;
+        }
+
+        let should_remove_account_from_staking_pool_register = staking_pool.withdraw(&account_id, amount);
         if should_remove_account_from_staking_pool_register{
             self.account_pool_register.remove(&account_id);
         }
-
-        Promise::new(account_id).transfer(amount);
-        self.last_total_balance -= amount;
+        total_withdraw += amount;
+        println!("Total withdraw {}", total_withdraw);
+        Promise::new(account_id).transfer(total_withdraw);
+        self.last_total_balance -= total_withdraw;
     }
 
     pub(crate) fn internal_stake(&mut self, amount: Balance) {

@@ -16,19 +16,19 @@ pub fn owner() -> AccountId {
 }
 
 pub fn A() -> AccountId {
-    "A".to_string()
+    "aa".to_string()
 }
 pub fn B() -> AccountId {
-    "B".to_string()
+    "bb".to_string()
 }
 pub fn C() -> AccountId {
-    "C".to_string()
+    "cc".to_string()
 }
 pub fn D() -> AccountId {
-    "D".to_string()
+    "dd".to_string()
 }
 pub fn E() -> AccountId {
-    "E".to_string()
+    "ee".to_string()
 }
 
 pub fn ntoy(near_amount: Balance) -> Balance {
