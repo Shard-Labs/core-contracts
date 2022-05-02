@@ -190,7 +190,7 @@ impl StakingContract {
     /// Get staking pool for account id, if not present throw an error
     pub(crate) fn get_staking_pool_or_assert_if_not_present(&mut self, account_id: &AccountId) -> &mut dyn StakingPool{
         let account_staking_pool_option = self.account_pool_register.get(&account_id);
-        assert!(account_staking_pool_option.is_some(), "Account should be registered for one of the staking pools");
+        assert!(account_staking_pool_option.is_some(), "Account {} should be registered for one of the staking pools", account_id);
 
         if account_staking_pool_option.unwrap() {
             return &mut self.rewards_staked_staking_pool;
@@ -199,11 +199,10 @@ impl StakingContract {
         }
     }
 
-    pub(crate) fn get_staking_pool_or_assert(&self, account_id: &AccountId) -> &dyn StakingPool{
+    pub(crate) fn get_staking_pool_or_default(&self, account_id: &AccountId) -> &dyn StakingPool{
         let account_staking_pool_option = self.account_pool_register.get(&account_id);
-        assert!(account_staking_pool_option.is_some(), "Account should be registered for one of the staking pools");
 
-        if account_staking_pool_option.unwrap() {
+        if account_staking_pool_option.unwrap_or(true){
             return &self.rewards_staked_staking_pool;
         }else{
             return &self.rewards_not_staked_staking_pool;
