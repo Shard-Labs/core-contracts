@@ -365,7 +365,7 @@ impl StakingContract {
 
         let account_id = env::predecessor_account_id();
         let amount = self.get_account_unstaked_balance(account_id);
-        self.internal_withdraw(amount.0, false);
+        self.internal_withdraw(amount.0, true);
         
         if need_to_restake {
             self.internal_restake();
@@ -713,14 +713,7 @@ mod tests {
         }
 
         pub fn simulate_stake_call(&mut self) {
-            let mut total_stake = self.contract.rewards_staked_staking_pool.total_staked_balance + self.contract.rewards_not_staked_staking_pool.total_staked_balance;
-            let mut saved_rewards = 0u128;
-
-            for acc 
-                in self.contract.rewards_not_staked_staking_pool.accounts.values_as_vector().iter() {
-                saved_rewards += self.contract.rewards_not_staked_staking_pool.compute_reward(&acc);
-            }
-            total_stake += saved_rewards;
+            let total_stake = self.contract.rewards_staked_staking_pool.total_staked_balance + self.contract.rewards_not_staked_staking_pool.total_staked_balance;
             // Stake action
             self.amount = self.amount + self.locked_amount - total_stake;
             self.locked_amount = total_stake;
@@ -1184,10 +1177,9 @@ mod tests {
     yton(emulator.contract.get_account_not_staked_rewards(bob()). 0));
         assert_eq_in_near!(emulator.contract.get_account_not_staked_rewards(bob()).0, rewards * 5 / 10);
         emulator.contract.withdraw_all();
-        emulator.update_context(bob(), 0);
-        emulator.contract.withdraw_rewards(bob());
         assert_eq!(emulator.contract.get_account_staked_balance(bob()).0, 0);
         assert_eq!(emulator.contract.get_account_unstaked_balance(bob()).0, 0);
+        assert_eq!(emulator.contract.get_account_not_staked_rewards(bob()).0, 0);
     }
 
     #[test]
@@ -1338,8 +1330,7 @@ mod tests {
 
         emulator.contract.withdraw_all();
         emulator.update_context(E(), 0);
-        assert_eq_in_near!(emulator.contract.get_account_not_staked_rewards(E()).0, ntoy(40));
-        emulator.contract.withdraw_rewards(bob());
+        assert_eq!(emulator.contract.get_account_not_staked_rewards(E()).0, 0);
         emulator.update_context(D(), 0);
         assert_eq_in_near!(emulator.contract.get_account_not_staked_rewards(D()).0, ntoy(30 + 100 + 100));
     }

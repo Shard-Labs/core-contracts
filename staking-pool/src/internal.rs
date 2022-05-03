@@ -68,9 +68,8 @@ impl StakingContract {
         let should_remove_account_from_staking_pool_register = staking_pool.withdraw(&account_id, amount);
         if should_remove_account_from_staking_pool_register{
             self.account_pool_register.remove(&account_id);
-        }
+        }        
         total_withdraw += amount;
-        println!("Total withdraw {}", total_withdraw);
         Promise::new(account_id).transfer(total_withdraw);
         self.last_total_balance -= total_withdraw;
     }
