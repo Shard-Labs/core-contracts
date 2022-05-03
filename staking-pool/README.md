@@ -117,6 +117,8 @@ It's done similarly to `stake` method but without debiting the unstaked balance 
 
 Once the rewards are distributed the contract remembers the new total balance.
 
+### NB! If you want to use this staking pool contract, use nbh-sp-factory.testnet account.
+
 ## Owner-only methods
 
 Contract owner can do the following:
@@ -155,6 +157,8 @@ provide some guarantees. Read more about slashing in [Nightshade paper](https://
     - `deposit_and_stake_rewards_not_stake` - to deposit and stake the attached balance in one call in the inner pool that doesnt restakes it rewards
     - `withdraw_rewards` - to withdraw all rewards, this method accepts a parameter receiver_account_id which is used for sending the rewards to
     - `get_account_not_staked_rewards` - returns amount of rewards. If the account has deposited and staked to the pool that doesnt restakes rewards, then it will receive something. Otherwise will receive 0.
+- Changed existing methods:
+    - `withdraw_all` - withdraws unstaked balance and also not staked rewards (if any)
     
     
 ### `0.4.0`

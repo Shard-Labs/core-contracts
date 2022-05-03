@@ -358,7 +358,7 @@ impl StakingContract {
         self.internal_restake();
     }
 
-    /// Withdraws the entire unstaked balance from the predecessor account.
+    /// Withdraws the entire unstaked balance from the predecessor account and unstaked rewards if there are some.
     /// It's only allowed if the `unstake` action was not performed in the four most recent epochs.
     pub fn withdraw_all(&mut self) {
         let need_to_restake = self.internal_ping();
